@@ -1,0 +1,54 @@
+# BookScan Web · iPad 图书扫描网页应用 v1
+
+这是**可部署的静态 PWA 网页应用源码**，不是 iPad 原生安装包，也不是已上线的网址。无需 npm、Node.js 或后端数据库；所有扫描内容保存在使用该网址的 iPad 浏览器本地 IndexedDB。
+
+## 立即使用（Windows + iPad，建议 GitHub Pages）
+
+1. 在 Windows 解压 `BookScan-Web.zip`，打开 `BookScan-Web` 文件夹。
+2. 登录 GitHub，新建一个 **Private/Public 以外需要注意 Pages 权限** 的仓库（普通免费个人账户最简单是 Public 仓库）。
+3. 把文件夹**内部的所有文件**上传到仓库根目录，包括 `index.html`、`app.js`、`pdf.js`、`styles.css`、`sw.js`、`manifest.webmanifest` 和图标。不要只上传 ZIP 文件。
+4. 仓库 Settings → Pages → Build and deployment → Deploy from a branch → `main` / `/(root)` → Save。
+5. GitHub 会显示一个 `https://你的用户名.github.io/仓库名/` 地址。在 iPad Safari 打开。首次使用时授权摄像头。
+6. Safari 分享菜单 → 添加到主屏幕。日后点击 BookScan 图标即可使用。
+
+**隐私提示：** GitHub Pages 发布的静态源代码可能是公开可见的（取决于仓库和账户配置），但扫描的照片/PDF 不会由本程序上传到 GitHub。请不要把扫描的书页或隐私信息上传到 GitHub 仓库。网页源码不能作为访问控制或保密措施。若需要完全私有部署，可使用支持 HTTPS 的自有静态网站。
+
+## Windows 本地界面测试
+
+如果 Windows 安装了 Python，在解压后的文件夹打开终端执行：
+
+```shell
+python -m http.server 8000
+```
+
+用 Windows 本机浏览器访问 `http://localhost:8000/`，可在本机安全上下文中测试界面及摄像头；不要直接在 iPad 打开 `http://Windows电脑局域网IP:8000` 期待摄像头正常工作，普通 HTTP 局域网地址不是可靠的安全上下文。iPad 使用建议部署 HTTPS。
+
+## 如何扫描
+
+1. 将 iPad 用牢固支架固定，**后置摄像头朝向打开的图书**，使左右两页都完整进入画面。
+2. 打开网址，填写书名，选择左→右或右→左，设置分割位置、四周裁边；先用一张跨页照片试扫。
+3. 点击“开启摄像头”，选择“开启自动拍摄”。第一次稳定后触发拍照；之后须检测到明显画面运动并再次稳定才会自动拍摄。
+4. 按需要调整“书脊分割位置”。先扫描约10组，检查是否裁断文字。
+5. 如果有不合格的跨页，使用“删除这一组”或“撤销最后一组”后重拍。
+6. 点击“生成并保存 PDF”。建议额外点击“下载原图备份”。
+
+## 功能和局限
+
+- 自动翻页：基于视频帧亮度差异的简单状态机；可能因大幅光线变化、手部遮挡等误判。必须看着扫描进度。
+- **视频帧拍照**：使用 getUserMedia 的实时视频帧并编码为 JPEG，清晰度受 Safari 当前支持的视频分辨率限制。不是原生 Camera API 的高分辨率静态照片。
+- 导入跨页照片：支持使用系统相机先拍摄较高清晰度照片，再从文件选择器导入。这是当前网页实现获取较高分辨率照片的备选方式。
+- 双页分割：固定比例直线切割和四边裁剪。无曲面展开、透视矫正、OCR、文字页码检查。
+- 切分位置变化：只影响新照片，使用“重新切分全部”可从保留的跨页原图重新处理全部。
+- 本地保存：IndexedDB 按跨页保存原图和两张处理图，刷新后通常仍可恢复；Safari 清理网站存储、隐私模式或空间不足都可能导致数据丢失。请及时导出！
+- 导出 PDF：内嵌 JPEG 的纯图片 PDF，不含可搜索文字层。页数多时可能需要较多 RAM，建议分批试测。
+- 批量下载原图：可能触发 Safari 的多文件下载限制。此功能不是单个 ZIP 备份。
+- 不上传云端：源代码没有上传照片的网络接口；Service Worker 仅缓存程序静态文件，GitHub Pages 只负责分发程序。
+- 本站需要 **HTTPS** 才能稳定获取摄像头权限。已启动后的离线运行依赖先前成功缓存，并不保证所有设备均可离线申请摄像头权限。
+
+## 技术构成
+
+HTML、CSS、JavaScript ES Modules、MediaDevices.getUserMedia、Canvas、IndexedDB、Service Worker，以及自带 `pdf.js` 中的 JPEG PDF 序列化器。无 CDN 依赖。
+
+## 下一版规划
+
+多点书页边缘检测、书脊曲面校正、质量评分、页码检查、OCR 与 PDF 文字层，以及更稳健的自动翻页识别。
