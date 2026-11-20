@@ -15,7 +15,7 @@
   <title>BookScan · 图书扫描仪</title>
 </head>
 <body>
-<header class="topbar"><div class="brand"><span class="logo">▤</span><div><strong>BookScan</strong><small>本地书页扫描工作台 · v3 四角裁边</small></div></div><span class="privacy">● 本地处理，不上传照片</span></header>
+<header class="topbar"><div class="brand"><span class="logo">▤</span><div><strong>BookScan</strong><small>本地书页扫描工作台 · v4 自动裁边优先</small></div></div><span class="privacy">● 本地处理，不上传照片</span></header>
 <main>
   <section class="workspace">
     <div class="panel camera-panel">
@@ -32,17 +32,17 @@
         <button id="capture" class="btn strong" disabled>手动拍摄</button>
       </div>
       <div class="controls secondary-controls"><label class="btn subtle file-label">导入跨页照片<input id="fileInput" type="file" accept="image/*" multiple></label><button class="btn subtle" id="stopCamera" disabled>关闭摄像头</button><button class="btn subtle" id="undo">撤销最后一组</button></div>
-      <p class="hint">自动模式：先等待书页稳定拍摄第一组；以后只有检测到明显翻页，再次静止时才拍摄。屏幕必须保持点亮、Safari 保持前台。</p>
+      <p class="hint">自动模式：先自动确认书本四边及稳定状态，再拍摄。每次看到“已保存”提示后再翻页；识别失败不会用整张照片冒充书页。屏幕必须保持点亮、Safari 保持前台。</p>
     </div>
     <aside class="panel settings-panel">
       <div class="panel-header"><h2>图书与裁剪设置</h2></div>
       <label class="field"><span>书名（用于 PDF 文件名）</span><input id="bookTitle" placeholder="例如：组织的重新发明" maxlength="100"></label>
       <label class="field"><span>页面顺序</span><select id="direction"><option value="ltr">左页 → 右页</option><option value="rtl">右页 → 左页</option></select></label>
-      <label class="field"><span>裁边模式</span><select id="cropMode"><option value="auto">自动识别书本四边</option><option value="fixed">固定四角（手动校准）</option><option value="off">传统比例裁边</option></select></label><button id="calibrate" class="btn full">手动校准四角</button><p id="cropStatus" class="hint">建议使用深色、无反光桌垫，四周留空。</p><div class="field"><div class="range-label"><label for="split">裁边后书脊分割位置</label><output id="splitValue">50%</output></div><input id="split" type="range" min="30" max="70" value="50" step="1"></div>
-      <div class="field"><div class="range-label"><label for="margin">备用比例裁边（识别失败时）</label><output id="marginValue">3%</output></div><input id="margin" type="range" min="0" max="12" value="3" step="1"></div>
+      <label class="field"><span>裁边模式</span><select id="cropMode"><option value="auto">自动识别书本四边</option><option value="fixed">高级：固定四角（可选）</option><option value="off">高级：传统比例裁边（不自动识别）</option></select></label><button id="calibrate" class="btn full">高级：手动校准（非必需）</button><p id="cropStatus" class="hint">自动模式不使用比例裁边作为备用。建议使用深色、无反光桌垫，书本四周留空。</p><div class="field"><div class="range-label"><label for="split">裁边后书脊分割位置</label><output id="splitValue">50%</output></div><input id="split" type="range" min="30" max="70" value="50" step="1"></div>
+      <div class="field"><div class="range-label"><label for="margin">仅传统比例模式使用</label><output id="marginValue">3%</output></div><input id="margin" type="range" min="0" max="12" value="3" step="1"></div>
       <div class="field"><div class="range-label"><label for="stability">稳定等待时间</label><output id="stabilityValue">0.8 秒</output></div><input id="stability" type="range" min="400" max="2000" value="800" step="100"></div>
       <label class="field"><span>输出画质</span><select id="quality"><option value="0.88">较高（建议）</option><option value="0.95">最高（更大文件）</option><option value="0.72">节省空间</option></select></label>
-      <div class="stats"><div><strong id="spreadCount">0</strong><small>已拍跨页</small></div><div><strong id="pageCount">0</strong><small>已存书页</small></div><div><strong id="cameraRes">—</strong><small>视频分辨率</small></div></div>
+      <div class="stats"><div><strong id="spreadCount">0</strong><small>已通过裁边</small></div><div><strong id="pageCount">0</strong><small>可用书页</small></div><div><strong id="cameraRes">—</strong><small>视频分辨率</small></div></div>
       <button id="exportPdf" class="btn primary full" disabled>生成并保存 PDF</button>
       <button id="clearAll" class="btn danger-outline full">清空当前书籍</button>
       <p class="hint">变更裁剪位置只影响后续拍摄；已有图片可通过“重新切分”按当前设置更新。生成 PDF 时按当前页面顺序导出。</p>
