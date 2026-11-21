@@ -22,3 +22,6 @@
 .page-actions button{min-width:65px}
 @media(max-width:520px){.search-bar{flex-direction:column}.search-controls button{width:100%}}
 #cropDialog{width:min(94vw,850px);max-height:94vh;overflow:auto;border:0;border-radius:16px;padding:16px;background:#fff;color:#16253a}#cropDialog::backdrop{background:#0009}#cropCanvas{display:block;max-width:100%;max-height:58vh;width:auto;height:auto;margin:auto;touch-action:none;cursor:crosshair}#cropDialog .controls{flex-wrap:wrap}#cropDialog p{font-size:14px}#cropDialog h2{margin-top:0}
+
+/* V5: A pending capture is one placeholder, never two fictitious pages. */
+.page-card.needs-review{border:2px solid #d69a37;background:#fff9ed}.page-card.needs-review .page-meta{color:#875c20;font-weight:600}
