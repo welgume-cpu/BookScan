@@ -1,5 +1,6 @@
 import {fullQuad,validQuad,detectBook,rectify,quadDifference} from './crop.js';
 import {createPdf} from './pdf.js';
+import {classifyLayout} from './layout.js';
 const $=id=>document.getElementById(id);
 const DB_NAME='bookscan_v1',STORE='spreads';
 let db,stream=null,auto=false,busy=false,spreads=[],lastFrame=null,lastCaptured=null,lastAt=0,stableAt=0,motionSeen=false,initialReady=false,animation=0,frameClock=0,toastTimer,ocrRunning=false,ocrStopRequested=false,editorPage=null,searchTimer=null;
@@ -13,21 +14,102 @@ function openDB(){return new Promise((resolve,reject)=>{const req=indexedDB.open
 function dbAll(){return new Promise((res,rej)=>{const q=db.transaction(STORE,'readonly').objectStore(STORE).getAll();q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error)})}
 function dbPut(s){return new Promise((res,rej)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).put(s);tx.oncomplete=res;tx.onerror=()=>rej(tx.error)})}
 function dbDelete(id){return new Promise((res,rej)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).delete(id);tx.oncomplete=res;tx.onerror=()=>rej(tx.error)})}
-async function persistSettings(){localStorage.setItem('bookscan_settings',JSON.stringify({title:$('bookTitle').value,direction:$('direction').value,split:$('split').value,margin:$('margin').value,stability:$('stability').value,quality:$('quality').value,cropMode:$('cropMode').value,fixedQuad}))}
+async function persistSettings(){localStorage.setItem('bookscan_settings',JSON.stringify({title:$('bookTitle').value,direction:$('direction').value,split:$('split').value,margin:$('margin').value,stability:$('stability').value,quality:$('quality').value,cropMode:$('cropMode').value,pageMode:$('pageMode').value,fixedQuad}))}
 function loadSettings(){try{const s=JSON.parse(localStorage.getItem('bookscan_settings')||'{}');for(const [key,value] of Object.entries(s)){const id=key==='title'?'bookTitle':key;if(key==='fixedQuad'){if(value&&validQuad(value))fixedQuad=value}else if($(id))$(id).value=value}}catch{}if(localStorage.getItem('bookscan_auto_v4')!=='1'){$('cropMode').value='auto';localStorage.setItem('bookscan_auto_v4','1');persistSettings()}updateOutputs()}
 function updateOutputs(){$('splitValue').textContent=$('split').value+'%';$('marginValue').textContent=$('margin').value+'%';$('stabilityValue').textContent=(Number($('stability').value)/1000).toFixed(1)+' 秒';drawGuide()}
 function canvasBlob(canvas,quality){return new Promise((res,rej)=>canvas.toBlob(b=>b?res(b):rej(Error('无法编码照片')),'image/jpeg',quality))}
 async function imageFromBlob(blob){const bitmap=await createImageBitmap(blob);return bitmap}
 function buildPage(bitmap,rect,quality){const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(rect.w));canvas.height=Math.max(1,Math.round(rect.h));canvas.getContext('2d').drawImage(bitmap,rect.x,rect.y,rect.w,rect.h,0,0,canvas.width,canvas.height);return canvasBlob(canvas,quality)}
 let fixedQuad=null,liveQuad=null,edgeMatches=0,editQuad=null,editBitmap=null,editTarget=null,drag=-1;
-async function splitImage(blob,override=null,centerOverride=null){const bitmap=await imageFromBlob(blob);try{const mode=$('cropMode').value,found=override||(mode==='fixed'?fixedQuad:mode==='auto'?detectBook(bitmap,bitmap.width,bitmap.height):null);if(!found&&mode!=='off')throw Error('未可靠识别书本四边，请让完整书本与深色背景清晰可见');const m=Number($('margin').value)/100;const q=found||[[m,m],[1-m,m],[1-m,1-m],[m,1-m]];const cropped=rectify(bitmap,q);const w=cropped.width,h=cropped.height,center=centerOverride??Number($('split').value)/100,split=w*center,quality=Number($('quality').value);const left=await buildPage(cropped,{x:0,y:0,w:split,h},quality),right=await buildPage(cropped,{x:split,y:0,w:w-split,h},quality);cropped.width=cropped.height=1;return {left,right,quad:q,center,cropReview:false,cropVersion:4}}finally{bitmap.close()}}
-function paintCrop(){if(!editBitmap)return;const c=$('cropCanvas'),ctx=c.getContext('2d');ctx.drawImage(editBitmap,0,0,c.width,c.height);const pts=editQuad.map(([x,y])=>[x*c.width,y*c.height]);ctx.fillStyle='rgba(0,0,0,.55)';ctx.beginPath();ctx.rect(0,0,c.width,c.height);ctx.moveTo(...pts[0]);pts.slice(1).forEach(p=>ctx.lineTo(...p));ctx.closePath();ctx.fill('evenodd');ctx.strokeStyle='#48ffac';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(...pts[0]);pts.slice(1).forEach(p=>ctx.lineTo(...p));ctx.closePath();ctx.stroke();const t=Number($('cropSplit').value)/100,lerp=(a,b)=>[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];ctx.strokeStyle='#ffdb55';ctx.beginPath();ctx.moveTo(...lerp(pts[0],pts[1]));ctx.lineTo(...lerp(pts[3],pts[2]));ctx.stroke();for(const [x,y] of pts){ctx.beginPath();ctx.arc(x,y,Math.max(8,c.width*.016),0,Math.PI*2);ctx.fillStyle='#48ffac';ctx.fill();ctx.strokeStyle='#123';ctx.stroke()}}
-async function openCrop(spread=null){if(busy||ocrRunning)return;if(!spread&&!video.videoWidth){toast('请先开启摄像头');return}auto=false;$('toggleAuto').textContent='开启自动拍摄';try{editTarget=spread;editBitmap=spread?await imageFromBlob(spread.original):await createImageBitmap(captureCanvas());editQuad=(spread?.quad||fixedQuad||detectBook(editBitmap,editBitmap.width,editBitmap.height)||fullQuad()).map(p=>[...p]);$('cropSplit').value=Math.round((spread?.center??Number($('split').value)/100)*100);const c=$('cropCanvas'),scale=Math.min(1,1000/Math.max(editBitmap.width,editBitmap.height));c.width=Math.round(editBitmap.width*scale);c.height=Math.round(editBitmap.height*scale);$('cropTitle').textContent=spread?'修正已拍跨页':'校准固定机位裁边';$('cropDialog').showModal();paintCrop()}catch(e){toast('无法打开裁边：'+e.message)}}
+// A capture is either ONE page or TWO pages. Ambiguous layouts stay in the review queue.
+async function splitImage(blob,override=null,centerOverride=null,layoutOverride=null){
+ const bitmap=await imageFromBlob(blob);
+ try{
+  const mode=$('cropMode').value,found=override||(mode==='fixed'?fixedQuad:mode==='auto'?detectBook(bitmap,bitmap.width,bitmap.height):null);
+  if(!found&&mode!=='off')throw Error('未可靠识别纸张四边，请让完整页面与深色背景清晰可见');
+  const m=Number($('margin').value)/100,q=found||[[m,m],[1-m,m],[1-m,1-m],[m,1-m]];
+  const cropped=rectify(bitmap,q),w=cropped.width,h=cropped.height;
+  const center=centerOverride??Number($('split').value)/100;
+  const selected=layoutOverride||$('pageMode').value;
+  const detected=selected==='auto'?classifyLayout(cropped):{layout:selected,confidence:1,reason:'用户指定'};
+  const layout=detected.layout,quality=Number($('quality').value);
+  const pages=[];
+  try{
+   if(layout==='single')pages.push({id:crypto.randomUUID(),side:'S',image:await buildPage(cropped,{x:0,y:0,w,h},quality),ocrText:null});
+   else if(layout==='double'){
+    const split=Math.max(1,Math.min(w-1,Math.round(w*center)));
+    pages.push({id:crypto.randomUUID(),side:'L',image:await buildPage(cropped,{x:0,y:0,w:split,h},quality),ocrText:null});
+    pages.push({id:crypto.randomUUID(),side:'R',image:await buildPage(cropped,{x:split,y:0,w:w-split,h},quality),ocrText:null});
+   }
+   return {pages,layout,confidence:detected.confidence,layoutReason:detected.reason,quad:q,center,
+      pending:layout==='unknown',layoutReview:layout==='unknown',cropReview:false,cropVersion:5,version:5};
+  }finally{cropped.width=cropped.height=1}
+ }finally{bitmap.close()}
+}
+function readyCapture(s){return !s.pending&&!s.cropReview&&Array.isArray(s.pages)&&s.pages.length>0}
+function orderedPages(s){const pages=s.pages||[];return s.layout==='double'&&$('direction').value==='rtl'?[...pages].reverse():pages}
+async function migrateLegacyData(){
+ const upgraded=[];
+ for(const old of spreads){
+  if(Array.isArray(old.pages)){upgraded.push(old);continue}
+  const pages=[];
+  if(old.left)pages.push({id:crypto.randomUUID(),side:'L',image:old.left,ocrText:old.ocrLeft??null});
+  if(old.right)pages.push({id:crypto.randomUUID(),side:'R',image:old.right,ocrText:old.ocrRight??null});
+  const updated={...old,version:5,pages,layout:pages.length===2?'double':pages.length===1?'single':'unknown',
+   pending:!!old.pending||!pages.length,layoutReview:!pages.length};
+  // Legacy left/right and OCR fields remain present so the original V4 data is not destroyed.
+  await dbPut(updated);upgraded.push(updated);
+ }
+ spreads=upgraded;
+}
+
+function paintCrop(){if(!editBitmap)return;const c=$('cropCanvas'),ctx=c.getContext('2d');ctx.drawImage(editBitmap,0,0,c.width,c.height);const pts=editQuad.map(([x,y])=>[x*c.width,y*c.height]);ctx.fillStyle='rgba(0,0,0,.55)';ctx.beginPath();ctx.rect(0,0,c.width,c.height);ctx.moveTo(...pts[0]);pts.slice(1).forEach(p=>ctx.lineTo(...p));ctx.closePath();ctx.fill('evenodd');ctx.strokeStyle='#48ffac';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(...pts[0]);pts.slice(1).forEach(p=>ctx.lineTo(...p));ctx.closePath();ctx.stroke();const t=Number($('cropSplit').value)/100,lerp=(a,b)=>[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];if($('cropLayout').value!=='single'){ctx.strokeStyle='#ffdb55';ctx.beginPath();ctx.moveTo(...lerp(pts[0],pts[1]));ctx.lineTo(...lerp(pts[3],pts[2]));ctx.stroke();}for(const [x,y] of pts){ctx.beginPath();ctx.arc(x,y,Math.max(8,c.width*.016),0,Math.PI*2);ctx.fillStyle='#48ffac';ctx.fill();ctx.strokeStyle='#123';ctx.stroke()}}
+async function openCrop(spread=null){if(busy||ocrRunning)return;if(!spread&&!video.videoWidth){toast('请先开启摄像头');return}auto=false;$('toggleAuto').textContent='开启自动拍摄';try{editTarget=spread;editBitmap=spread?await imageFromBlob(spread.original):await createImageBitmap(captureCanvas());editQuad=(spread?.quad||fixedQuad||detectBook(editBitmap,editBitmap.width,editBitmap.height)||fullQuad()).map(p=>[...p]);$('cropSplit').value=Math.round((spread?.center??Number($('split').value)/100)*100);$('cropLayout').value=spread?.layout==='unknown'?'auto':(spread?.layout||$('pageMode').value);const c=$('cropCanvas'),scale=Math.min(1,1000/Math.max(editBitmap.width,editBitmap.height));c.width=Math.round(editBitmap.width*scale);c.height=Math.round(editBitmap.height*scale);$('cropTitle').textContent=spread?'修正本次拍摄':'校准固定机位裁边';$('cropDialog').showModal();paintCrop()}catch(e){toast('无法打开裁边：'+e.message)}}
 function closeCrop(){if(editBitmap)editBitmap.close();editBitmap=null;editTarget=null;drag=-1}
-function initCrop(){const c=$('cropCanvas');const point=e=>{const r=c.getBoundingClientRect();return [Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))]};c.onpointerdown=e=>{const p=point(e);drag=editQuad.reduce((best,q,i)=>Math.hypot(q[0]-p[0],q[1]-p[1])<Math.hypot(editQuad[best][0]-p[0],editQuad[best][1]-p[1])?i:best,0);c.setPointerCapture(e.pointerId)};c.onpointermove=e=>{if(drag<0)return;const q=editQuad.map(p=>[...p]);q[drag]=point(e);if(validQuad(q)){editQuad=q;paintCrop()}};c.onpointerup=c.onpointercancel=()=>drag=-1;$('cropSplit').oninput=paintCrop;$('cropReset').onclick=()=>{editQuad=fullQuad();paintCrop()};$('cropDetect').onclick=()=>{const q=detectBook(editBitmap,editBitmap.width,editBitmap.height);if(q){editQuad=q;paintCrop()}else toast('未可靠识别，请手动拖动四角')};$('cropCancel').onclick=()=>$('cropDialog').close();$('cropDialog').onclose=closeCrop;$('calibrate').onclick=()=>openCrop();$('cropMode').onchange=()=>{liveQuad=null;edgeMatches=0;persistSettings();drawGuide()};$('cropSave').onclick=async()=>{if(!validQuad(editQuad)||busy)return;busy=true;try{const q=editQuad.map(p=>[...p]),center=Number($('cropSplit').value)/100;if(editTarget){const pages=await splitImage(editTarget.original,q,center),updated={...editTarget,...pages,cropReview:false,pending:false};delete updated.ocrLeft;delete updated.ocrRight;await dbPut(updated);spreads=spreads.map(s=>s.id===updated.id?updated:s);await render();updateOcrUI();runSearch();toast('裁边已更新，该组需重新 OCR')}else{fixedQuad=q;$('cropMode').value='fixed';$('split').value=Math.round(center*100);updateOutputs();await persistSettings();toast('固定裁边已保存，后续拍摄自动使用')}$('cropDialog').close()}catch(e){toast('裁边失败：'+e.message)}finally{busy=false}}}
+function initCrop(){const c=$('cropCanvas');const point=e=>{const r=c.getBoundingClientRect();return [Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))]};c.onpointerdown=e=>{const p=point(e);drag=editQuad.reduce((best,q,i)=>Math.hypot(q[0]-p[0],q[1]-p[1])<Math.hypot(editQuad[best][0]-p[0],editQuad[best][1]-p[1])?i:best,0);c.setPointerCapture(e.pointerId)};c.onpointermove=e=>{if(drag<0)return;const q=editQuad.map(p=>[...p]);q[drag]=point(e);if(validQuad(q)){editQuad=q;paintCrop()}};c.onpointerup=c.onpointercancel=()=>drag=-1;$('cropSplit').oninput=paintCrop;$('cropLayout').onchange=paintCrop;$('cropReset').onclick=()=>{editQuad=fullQuad();paintCrop()};$('cropDetect').onclick=()=>{const q=detectBook(editBitmap,editBitmap.width,editBitmap.height);if(q){editQuad=q;paintCrop()}else toast('未可靠识别，请手动拖动四角')};$('cropCancel').onclick=()=>$('cropDialog').close();$('cropDialog').onclose=closeCrop;$('calibrate').onclick=()=>openCrop();$('cropMode').onchange=()=>{liveQuad=null;edgeMatches=0;persistSettings();drawGuide()};$('cropSave').onclick=async()=>{if(!validQuad(editQuad)||busy)return;busy=true;try{const q=editQuad.map(p=>[...p]),center=Number($('cropSplit').value)/100;if(editTarget){const pages=await splitImage(editTarget.original,q,center,$('cropLayout').value),updated={...editTarget,...pages};delete updated.ocrLeft;delete updated.ocrRight;await dbPut(updated);spreads=spreads.map(s=>s.id===updated.id?updated:s);await render();updateOcrUI();runSearch();toast(updated.pending?'已保存原图，请选择单页或双页以完成确认':'裁边与页数已更新，该组需重新 OCR')}else{fixedQuad=q;$('cropMode').value='fixed';$('split').value=Math.round(center*100);updateOutputs();await persistSettings();toast('固定裁边已保存，后续拍摄自动使用')}$('cropDialog').close()}catch(e){toast('裁边失败：'+e.message)}finally{busy=false}}}
 function sorted(){return [...spreads].sort((a,b)=>a.order-b.order)}
-async function saveSpread(original,pages){const order=spreads.length?Math.max(...spreads.map(s=>s.order))+1:1;const entry={id:crypto.randomUUID(),order,original,...pages,created:Date.now()};await dbPut(entry);spreads.push(entry);lastAt=performance.now();await render();updateOcrUI();return entry}
-async function addSpread(original,imported=false,expected=null){if(busy||ocrRunning)return false;busy=true;try{let pages;try{pages=await splitImage(original);if(expected&&quadDifference(pages.quad,expected)>.035)throw Error('拍摄瞬间书本边界发生变化')}catch(e){if(!imported){status('未确认四边 · 请勿翻页，正在重试',auto);toast(e.message);return false}await saveSpread(original,{cropReview:true,pending:true,cropVersion:4});toast('原图已保留，但未通过自动裁边；未列入PDF');return false}await saveSpread(original,pages);status('已保存第 '+spreads.length+' 组 · 可以翻页',auto);toast(`已保存跨页 #${spreads.length}（2页）`);return true}catch(e){toast('拍摄保存失败：'+e.message);status('保存失败 · 请勿翻页');auto=false;$('toggleAuto').textContent='开启自动拍摄';return false}finally{busy=false}}
+async function saveSpread(original,result){
+ const order=spreads.length?Math.max(...spreads.map(s=>s.order))+1:1;
+ const entry={id:crypto.randomUUID(),order,original,...result,created:Date.now()};
+ await dbPut(entry);spreads.push(entry);lastAt=performance.now();await render();updateOcrUI();return entry;
+}
+async function addSpread(original,imported=false,expected=null){
+ if(busy||ocrRunning)return false;busy=true;
+ try{
+  let result;
+  try{
+   result=await splitImage(original);
+   if(expected&&quadDifference(result.quad,expected)>.035)throw Error('拍摄瞬间纸张边界发生变化');
+  }catch(e){
+   if(!imported){status('未确认四边 · 请勿翻页，正在重试',auto);toast(e.message);return false}
+   await saveSpread(original,{pages:[],layout:'unknown',pending:true,cropReview:true,layoutReview:true,cropVersion:5,version:5});
+   toast('原图已保存但未通过裁边检查，请处理后导出');return true;
+  }
+  const entry=await saveSpread(original,result);
+  const msg=result.pending?'已保存原图 · 单双页待确认，可以翻页':`已保存${result.pages.length}页 · 可以翻页`;
+  status(msg,auto);toast(`第 ${entry.order} 次拍摄：${result.pending?'待确认':result.pages.length+'页'}`);
+  return true;
+ }catch(e){toast('拍摄保存失败：'+e.message);status('保存失败 · 请勿翻页');auto=false;$('toggleAuto').textContent='开启自动拍摄';return false}
+ finally{busy=false}
+}
+async function changeCaptureLayout(capture,layout){
+ if(busy||ocrRunning)return;busy=true;
+ try{
+  const result=await splitImage(capture.original,capture.quad||null,capture.center??null,layout);
+  const updated={...capture,...result};delete updated.ocrLeft;delete updated.ocrRight;
+  await dbPut(updated);Object.assign(capture,updated);
+  await render();updateOcrUI();runSearch();toast(`本次拍摄已设为${layout==='single'?'单页':'双页'}，请重新识别这次的文字`);
+ }catch(e){toast('重新处理失败：'+e.message)}finally{busy=false}
+}
+async function deleteOnePage(capture,pageId){
+ if(busy||ocrRunning)return;
+ if(!confirm('删除这一页？原始照片仍会保留在本次拍摄记录中。'))return;
+ const remaining=capture.pages.filter(p=>p.id!==pageId);
+ if(remaining.length===0){await dbDelete(capture.id);spreads=spreads.filter(x=>x.id!==capture.id)}
+ else{const updated={...capture,pages:remaining,layout:'single',pending:false};await dbPut(updated);Object.assign(capture,updated)}
+ await render();updateOcrUI();runSearch();
+}
+
 function captureCanvas(){if(!video.videoWidth)throw Error('摄像头未就绪');const c=document.createElement('canvas');c.width=video.videoWidth;c.height=video.videoHeight;c.getContext('2d',{alpha:false}).drawImage(video,0,0,c.width,c.height);return c}
 let taking=false,retryAt=0;
 async function captureNow(){if(busy||taking||ocrRunning||!video.videoWidth)return;taking=true;try{const frame=readFrame(),expected=$('cropMode').value==='auto'&&auto?liveQuad:null;const canvas=captureCanvas();const blob=await canvasBlob(canvas,.94);canvas.width=canvas.height=1;const ok=await addSpread(blob,false,expected);if(ok){lastCaptured=frame;initialReady=true;motionSeen=false;stableAt=performance.now()}else{retryAt=performance.now()+1200;edgeMatches=0}}catch(e){toast(e.message);retryAt=performance.now()+1200}finally{taking=false}}
@@ -57,28 +139,85 @@ async function startCamera(){if(!navigator.mediaDevices?.getUserMedia){toast('�
 function stopCamera(){auto=false;liveQuad=null;edgeMatches=0;stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;cancelAnimationFrame(animation);$('emptyCamera').style.display='';$('startCamera').disabled=false;$('stopCamera').disabled=true;$('capture').disabled=true;$('toggleAuto').disabled=true;$('toggleAuto').textContent='开启自动拍摄';status('未启动')}
 function download(blob,name){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000)}
 function filename(){return ($('bookTitle').value.trim()||'BookScan').replace(/[\\/:*?"<>|]/g,'_').slice(0,80)}
-function pageSequence(){const seq=[];for(const spread of sorted()){if(spread.pending||!spread.left||!spread.right)continue;const pair=$('direction').value==='rtl'?[spread.right,spread.left]:[spread.left,spread.right];seq.push(...pair)}return seq}
+function pageSequence(){return sorted().filter(readyCapture).flatMap(s=>orderedPages(s).map(p=>p.image))}
 let galleryUrls=[];
-async function render(){for(const url of galleryUrls)URL.revokeObjectURL(url);galleryUrls=[];const ss=sorted();const ready=ss.filter(s=>!s.pending&&!s.cropReview).length;$('spreadCount').textContent=ready;$('pageCount').textContent=ready*2;$('pageCountHeader').textContent=ready*2+' 页'+(ready<ss.length?' · '+(ss.length-ready)+' 组待处理':'');$('exportPdf').disabled=!ss.length||ss.some(s=>s.pending||s.cropReview);$('resplit').disabled=!ss.length;$('downloadBackup').disabled=!ss.length;$('gallery').replaceChildren();if(!ss.length){$('gallery').innerHTML='<div class="empty-gallery">尚无扫描页。开启摄像头或导入一张打开书本的跨页照片。</div>';return}
-  const urls=galleryUrls;for(let s=0;s<ss.length;s++){const spread=ss[s];const pages=$('direction').value==='rtl'?[spread.right,spread.left]:[spread.left,spread.right];for(let j=0;j<2;j++){const idx=s*2+j;const card=document.createElement('div');card.className='page-card';const img=document.createElement('img');const url=URL.createObjectURL(pages[j]||spread.original);urls.push(url);img.loading='lazy';img.src=url;img.alt=`第 ${idx+1} 页`;const meta=document.createElement('div');meta.className='page-meta';meta.textContent=`第 ${idx+1} 页 · 第 ${s+1} 组${spread.cropReview?" · 未通过裁边，暂不可导出":""}`;const actions=document.createElement('div');actions.className='page-actions';const del=document.createElement('button');del.className='delete';del.textContent='删除这一组';del.onclick=async()=>{if(busy||ocrRunning){toast('请先停止当前处理，再删除页面');return}if(!confirm(`删除第 ${s+1} 组的两页吗？`))return;await dbDelete(spread.id);spreads=spreads.filter(x=>x.id!==spread.id);await render();updateOcrUI()};actions.append(del);const crop=document.createElement('button');crop.textContent='修正裁边';crop.onclick=()=>openCrop(spread);actions.append(crop);const edit=document.createElement('button');edit.textContent='文字/校对';edit.onclick=()=>openOcrEditor(spread.id,$('direction').value==='rtl'?(j===0?'R':'L'):(j===0?'L':'R'));actions.append(edit);card.id='page-'+(idx+1);card.dataset.number=String(idx+1);card.append(img,meta,actions);$('gallery').append(card)}}
+async function render(){
+ for(const url of galleryUrls)URL.revokeObjectURL(url);galleryUrls=[];
+ const captures=sorted(),ready=captures.filter(readyCapture),total=ready.reduce((n,s)=>n+s.pages.length,0);
+ $('spreadCount').textContent=String(ready.length);$('pageCount').textContent=String(total);
+ const unresolved=captures.length-ready.length;
+ $('pageCountHeader').textContent=total+' 页'+(unresolved?` · ${unresolved} 次拍摄待确认`:'');
+ $('exportPdf').disabled=!total||unresolved>0;
+ $('resplit').disabled=!captures.length;$('downloadBackup').disabled=!captures.length;$('gallery').replaceChildren();
+ if(!captures.length){$('gallery').innerHTML='<div class="empty-gallery">尚无扫描页。可导入单页封面或打开的双页书本照片。</div>';return}
+ let number=0;
+ for(let n=0;n<captures.length;n++){
+  const capture=captures[n];const items=readyCapture(capture)?orderedPages(capture):[null];
+  for(const page of items){
+   if(page)number++;
+   const card=document.createElement('div');card.className='page-card';if(!page)card.classList.add('needs-review');
+   const img=document.createElement('img');const url=URL.createObjectURL(page?.image||capture.original);galleryUrls.push(url);
+   img.loading='lazy';img.src=url;img.alt=page?`第 ${number} 页`:'待确认的原始照片';
+   const meta=document.createElement('div');meta.className='page-meta';
+   meta.textContent=page?`第 ${number} 页 · 拍摄 ${n+1}（${capture.pages.length}页）`:
+     `第 ${n+1} 次拍摄 · ${capture.cropReview?'裁边待修正':'单双页待确认'}`;
+   const actions=document.createElement('div');actions.className='page-actions';
+   const btn=(label,fn,cls='')=>{const b=document.createElement('button');b.textContent=label;if(cls)b.className=cls;b.onclick=fn;actions.append(b)};
+   btn('改单页',()=>changeCaptureLayout(capture,'single'));
+   btn('改双页',()=>changeCaptureLayout(capture,'double'));
+   btn('修正裁边',()=>openCrop(capture));
+   if(page){
+    btn('文字/校对',()=>openOcrEditor(capture.id,page.id));
+    btn('删除本页',()=>deleteOnePage(capture,page.id),'delete');
+    card.id='page-'+number;card.dataset.number=String(number);
+   }else{
+    btn('删除本次',async()=>{if(busy||ocrRunning)return;if(!confirm('删除本次待确认照片？'))return;await dbDelete(capture.id);spreads=spreads.filter(x=>x.id!==capture.id);await render();updateOcrUI()},'delete');
+   }
+   card.append(img,meta,actions);$('gallery').append(card);
+  }
+ }
 }
-async function exportPdf(){if(busy||ocrRunning)return;if(spreads.some(s=>s.pending||s.cropReview)){toast('有跨页未通过自动裁边，请先重新裁边全部');return}busy=true;const b=$('exportPdf');b.disabled=true;try{const pages=pageSequence();status(`正在生成 PDF（${pages.length}页）`);const blob=await createPdf(pages,(done,total)=>{b.textContent=`PDF 处理中 ${done}/${total}`});download(blob,filename()+'.pdf');toast(`PDF 已生成，共 ${pages.length} 页；请在 Safari 下载项或“文件”中查看`)}catch(e){toast('导出失败：'+e.message)}finally{b.textContent='生成并保存 PDF';b.disabled=false;busy=false;status(auto?'自动拍摄中':'准备就绪',auto)}}
+
+async function exportPdf(){if(busy||ocrRunning)return;if(spreads.some(s=>!readyCapture(s))){toast('有照片尚未确认页数或裁边，请先处理');return}busy=true;const b=$('exportPdf');b.disabled=true;try{const pages=pageSequence();status(`正在生成 PDF（${pages.length}页）`);const blob=await createPdf(pages,(done,total)=>{b.textContent=`PDF 处理中 ${done}/${total}`});download(blob,filename()+'.pdf');toast(`PDF 已生成，共 ${pages.length} 页；请在 Safari 下载项或“文件”中查看`)}catch(e){toast('导出失败：'+e.message)}finally{b.textContent='生成并保存 PDF';b.disabled=false;busy=false;status(auto?'自动拍摄中':'准备就绪',auto)}}
 async function processFiles(files){if(taking||busy||ocrRunning){toast('请先完成当前处理');return}auto=false;$('toggleAuto').textContent='开启自动拍摄';for(const file of files){try{await addSpread(file,true)}catch(e){toast('导入失败：'+e.message)}}}
-async function resplitAll(){if(busy||ocrRunning||!spreads.length)return;if(!confirm('重新自动检测全部原图？成功的页将更新并清除对应 OCR，失败的原图及旧结果仍保留。'))return;auto=false;$('toggleAuto').textContent='开启自动拍摄';$('cropMode').value='auto';await persistSettings();busy=true;let ok=0,failed=[];try{let i=0;for(const spread of sorted()){let pages;try{pages=await splitImage(spread.original)}catch(e){const updated={...spread,cropReview:true};await dbPut(updated);Object.assign(spread,updated);failed.push(i+1)}if(pages){const updated={...spread,...pages,pending:false,cropReview:false};delete updated.ocrLeft;delete updated.ocrRight;await dbPut(updated);delete spread.ocrLeft;delete spread.ocrRight;Object.assign(spread,updated);ok++}status(`重新裁边 ${++i}/${spreads.length}`);await new Promise(r=>setTimeout(r,0))}toast(`成功 ${ok} 组；失败 ${failed.length} 组${failed.length?'：'+failed.join('、'):''}`)}catch(e){toast('重新裁边中断：'+e.message)}finally{await render();updateOcrUI();runSearch();busy=false;status(failed.length?`未通过裁边 ${failed.length} 组，原图已保留`:'准备就绪')}}
+async function resplitAll(){
+ if(busy||ocrRunning||!spreads.length)return;
+ if(!confirm('重新自动检测全部原图？这会重新判定单页/双页，并清除重新处理页面的 OCR；建议先备份。'))return;
+ auto=false;$('toggleAuto').textContent='开启自动拍摄';$('cropMode').value='auto';await persistSettings();busy=true;
+ let ok=0,failed=[];
+ try{
+  let i=0;
+  for(const capture of sorted()){
+   try{
+    const result=await splitImage(capture.original,null,null,'auto');
+    const updated={...capture,...result};delete updated.ocrLeft;delete updated.ocrRight;
+    await dbPut(updated);Object.assign(capture,updated);
+    if(result.pending)failed.push(i+1);else ok++;
+   }catch(e){
+    const updated={...capture,pending:true,cropReview:true};await dbPut(updated);Object.assign(capture,updated);failed.push(i+1);
+   }
+   status(`重新检测 ${++i}/${spreads.length}`);await new Promise(r=>setTimeout(r,0));
+  }
+  toast(`已识别 ${ok} 次拍摄，待确认 ${failed.length} 次${failed.length?'：'+failed.join('、'):''}`);
+ }catch(e){toast('重新检测中断：'+e.message)}
+ finally{await render();updateOcrUI();runSearch();busy=false;status(failed.length?`待确认 ${failed.length} 次拍摄`:'准备就绪')}
+}
+
 // Original photos are exported individually through the browser share/download manager.
-async function backupOriginals(){if(!spreads.length)return;if(!confirm('将逐张下载跨页原图。iPad Safari 可能要求允许多个下载项目。继续吗？'))return;let i=0;for(const spread of sorted()){download(spread.original,`${filename()}_跨页_${String(++i).padStart(4,'0')}.jpg`);await new Promise(r=>setTimeout(r,250))}toast(`已请求下载 ${i} 张原图；请检查浏览器是否拦截批量下载`)}
+async function backupOriginals(){if(!spreads.length)return;if(!confirm('将逐张下载拍摄原图。iPad Safari 可能要求允许多个下载项目。继续吗？'))return;let i=0;for(const spread of sorted()){download(spread.original,`${filename()}_原图_${String(++i).padStart(4,'0')}.jpg`);await new Promise(r=>setTimeout(r,250))}toast(`已请求下载 ${i} 张原图；请检查浏览器是否拦截批量下载`)}
 async function undo(){if(busy||ocrRunning){toast('请先停止文字识别');return}const last=sorted().at(-1);if(!last)return;await dbDelete(last.id);spreads=spreads.filter(s=>s.id!==last.id);await render();updateOcrUI();toast('已撤销最后一组')}
 
 // Search index lives alongside image blobs in the existing IndexedDB spread records.
 // The OCR result is text-only and never leaves the device; OCR files arrive from a public CDN.
 function pageRecords(){
-  const result=[];
-  for(const spread of sorted()){
-    const order=$('direction').value==='rtl'?[['R','ocrRight','right'],['L','ocrLeft','left']]:[['L','ocrLeft','left'],['R','ocrRight','right']];
-    for(const [side,key,blobKey] of order)result.push({spread,side,key,blobKey,number:result.length+1,text:spread.pending||spread.cropReview?null:spread[key]??null,blocked:spread.pending||spread.cropReview});
-  }
-  return result;
+ const result=[];
+ for(const capture of sorted()){
+  if(!readyCapture(capture))continue;
+  for(const page of orderedPages(capture))result.push({capture,page,number:result.length+1,text:page.ocrText??null});
+ }
+ return result;
 }
+
 function updateOcrUI(){
   const pages=pageRecords(),done=pages.filter(p=>p.text!==null).length;
   $('ocrCoverage').textContent=`已识别 ${done} / ${pages.length} 页`;
@@ -110,12 +249,12 @@ async function startOCR(){
     for(const page of pages){
       if(ocrStopRequested)break;
       $('ocrProgress').textContent=`识别第 ${page.number} 页 · 本次 ${completed+1}/${pages.length}`;
-      const url=URL.createObjectURL(page.spread[page.blobKey]);
+      const url=URL.createObjectURL(page.page.image);
       try{
         const result=await worker.recognize(url);
         const text=String(result.data?.text??'');
-        page.spread[page.key]=text;
-        await dbPut(page.spread);completed++;
+        page.page.ocrText=text;
+        await dbPut(page.capture);completed++;
       }finally{URL.revokeObjectURL(url)}
       updateOcrUI();runSearch();
       // Yield to touch events and Safari's UI between pages.
@@ -160,16 +299,16 @@ function jumpToPage(number){
   document.querySelectorAll('.page-card.current-hit').forEach(el=>el.classList.remove('current-hit'));
   card.classList.add('current-hit');card.scrollIntoView({behavior:'smooth',block:'center'});
 }
-function openOcrEditor(spreadId,side){
-  const page=pageRecords().find(p=>p.spread.id===spreadId&&p.side===side);
-  if(!page||page.blocked){toast('请先通过裁边检查');return}editorPage={spreadId,side};$('ocrEditorTitle').textContent=`第 ${page.number} 页识别文本（可校对）`;
+function openOcrEditor(captureId,pageId){
+  const page=pageRecords().find(p=>p.capture.id===captureId&&p.page.id===pageId);
+  if(!page){toast('请先确认页面');return}editorPage={captureId,pageId};$('ocrEditorTitle').textContent=`第 ${page.number} 页识别文本（可校对）`;
   $('ocrText').value=page.text??'';$('ocrEditor').hidden=false;
   $('ocrEditor').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 async function saveOcrEditor(){
-  if(!editorPage)return;const page=pageRecords().find(p=>p.spread.id===editorPage.spreadId&&p.side===editorPage.side);
-  if(!page)return;page.spread[page.key]=$('ocrText').value;try{await dbPut(page.spread);updateOcrUI();runSearch();toast('文字校对已保存到本机')}catch(error){toast('保存失败：'+error.message)}
+  if(!editorPage)return;const page=pageRecords().find(p=>p.capture.id===editorPage.captureId&&p.page.id===editorPage.pageId);
+  if(!page)return;page.page.ocrText=$('ocrText').value;try{await dbPut(page.capture);updateOcrUI();runSearch();toast('文字校对已保存到本机')}catch(error){toast('保存失败：'+error.message)}
 }
 
-async function init(){initCrop();loadSettings();try{db=await openDB();spreads=await dbAll();await render();updateOcrUI()}catch(e){toast('本机存储不可用：'+e.message)}$('startCamera').onclick=startCamera;$('stopCamera').onclick=stopCamera;$('capture').onclick=captureNow;$('toggleAuto').onclick=()=>{auto=!auto;$('toggleAuto').textContent=auto?'暂停自动拍摄':'开启自动拍摄';lastFrame=null;lastCaptured=null;stableAt=0;motionSeen=false;initialReady=false;lastAt=0;edgeMatches=0;retryAt=0;status(auto?'自动拍摄已开启':'自动拍摄已暂停',auto)};$('undo').onclick=undo;$('fileInput').onchange=async e=>{await processFiles([...e.target.files]);e.target.value=''};$('exportPdf').onclick=exportPdf;$('resplit').onclick=resplitAll;$('downloadBackup').onclick=backupOriginals;$('clearAll').onclick=async()=>{if(busy||ocrRunning){toast('请先停止当前处理');return}if(!spreads.length)return;if(!confirm('永久删除当前所有扫描记录和原始照片？建议先导出 PDF 与备份。'))return;for(const s of spreads)await dbDelete(s.id);spreads=[];await render();updateOcrUI();$('searchResults').replaceChildren();toast('当前书籍已清空')};for(const id of ['split','margin','stability','quality','bookTitle','direction'])$(id).addEventListener('change',async()=>{updateOutputs();await persistSettings();if(id==='direction'){await render();updateOcrUI();runSearch()}});$('startOcr').onclick=startOCR;$('stopOcr').onclick=()=>{ocrStopRequested=true;$('ocrProgress').textContent='停止请求已收到；当前页完成后退出'};$('searchButton').onclick=runSearch;$('searchInput').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(runSearch,180)});$('ocrLanguage').addEventListener('change',updateOcrUI);$('closeEditor').onclick=()=>{$('ocrEditor').hidden=true;editorPage=null};$('saveOcrText').onclick=saveOcrEditor;window.addEventListener('resize',drawGuide);document.addEventListener('visibilitychange',()=>{if(document.hidden&&auto){auto=false;$('toggleAuto').textContent='开启自动拍摄';status('已暂停：页面进入后台')}});if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(()=>{})}
+async function init(){initCrop();loadSettings();try{db=await openDB();spreads=await dbAll();await migrateLegacyData();await render();updateOcrUI()}catch(e){toast('本机存储不可用：'+e.message)}$('startCamera').onclick=startCamera;$('stopCamera').onclick=stopCamera;$('capture').onclick=captureNow;$('toggleAuto').onclick=()=>{auto=!auto;$('toggleAuto').textContent=auto?'暂停自动拍摄':'开启自动拍摄';lastFrame=null;lastCaptured=null;stableAt=0;motionSeen=false;initialReady=false;lastAt=0;edgeMatches=0;retryAt=0;status(auto?'自动拍摄已开启':'自动拍摄已暂停',auto)};$('undo').onclick=undo;$('fileInput').onchange=async e=>{await processFiles([...e.target.files]);e.target.value=''};$('exportPdf').onclick=exportPdf;$('resplit').onclick=resplitAll;$('downloadBackup').onclick=backupOriginals;$('clearAll').onclick=async()=>{if(busy||ocrRunning){toast('请先停止当前处理');return}if(!spreads.length)return;if(!confirm('永久删除当前所有扫描记录和原始照片？建议先导出 PDF 与备份。'))return;for(const s of spreads)await dbDelete(s.id);spreads=[];await render();updateOcrUI();$('searchResults').replaceChildren();toast('当前书籍已清空')};for(const id of ['split','margin','stability','quality','bookTitle','direction','pageMode'])$(id).addEventListener('change',async()=>{updateOutputs();await persistSettings();if(id==='direction'){await render();updateOcrUI();runSearch()}});$('startOcr').onclick=startOCR;$('stopOcr').onclick=()=>{ocrStopRequested=true;$('ocrProgress').textContent='停止请求已收到；当前页完成后退出'};$('searchButton').onclick=runSearch;$('searchInput').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(runSearch,180)});$('ocrLanguage').addEventListener('change',updateOcrUI);$('closeEditor').onclick=()=>{$('ocrEditor').hidden=true;editorPage=null};$('saveOcrText').onclick=saveOcrEditor;window.addEventListener('resize',drawGuide);document.addEventListener('visibilitychange',()=>{if(document.hidden&&auto){auto=false;$('toggleAuto').textContent='开启自动拍摄';status('已暂停：页面进入后台')}});if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(()=>{})}
 init();
