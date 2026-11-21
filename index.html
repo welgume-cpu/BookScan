@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="BookScan">
-  <meta name="description" content="iPad 连续图书扫描、双页切分与本地 PDF 导出">
+  <meta name="description" content="iPad 图书单页/双页自动识别、连续扫描与 PDF 导出">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.png">
@@ -15,7 +15,7 @@
   <title>BookScan · 图书扫描仪</title>
 </head>
 <body>
-<header class="topbar"><div class="brand"><span class="logo">▤</span><div><strong>BookScan</strong><small>本地书页扫描工作台 · v4 自动裁边优先</small></div></div><span class="privacy">● 本地处理，不上传照片</span></header>
+<header class="topbar"><div class="brand"><span class="logo">▤</span><div><strong>BookScan</strong><small>本地书页扫描工作台 · v5 单双页智能识别</small></div></div><span class="privacy">● 本地处理，不上传照片</span></header>
 <main>
   <section class="workspace">
     <div class="panel camera-panel">
@@ -31,21 +31,23 @@
         <button id="toggleAuto" class="btn" disabled>开启自动拍摄</button>
         <button id="capture" class="btn strong" disabled>手动拍摄</button>
       </div>
-      <div class="controls secondary-controls"><label class="btn subtle file-label">导入跨页照片<input id="fileInput" type="file" accept="image/*" multiple></label><button class="btn subtle" id="stopCamera" disabled>关闭摄像头</button><button class="btn subtle" id="undo">撤销最后一组</button></div>
+      <div class="controls secondary-controls"><label class="btn subtle file-label">导入书页照片<input id="fileInput" type="file" accept="image/*" multiple></label><button class="btn subtle" id="stopCamera" disabled>关闭摄像头</button><button class="btn subtle" id="undo">撤销最后一组</button></div>
       <p class="hint">自动模式：先自动确认书本四边及稳定状态，再拍摄。每次看到“已保存”提示后再翻页；识别失败不会用整张照片冒充书页。屏幕必须保持点亮、Safari 保持前台。</p>
     </div>
     <aside class="panel settings-panel">
       <div class="panel-header"><h2>图书与裁剪设置</h2></div>
       <label class="field"><span>书名（用于 PDF 文件名）</span><input id="bookTitle" placeholder="例如：组织的重新发明" maxlength="100"></label>
+      <label class="field"><span>每次拍摄的页面类型</span><select id="pageMode"><option value="auto">自动识别（推荐）</option><option value="single">固定单页（封面、扉页）</option><option value="double">固定双页（打开的书）</option></select></label>
+      <p class="hint">自动模式遇到难以判断的页面，会保留原图并标记待确认，不会强行切为两页。</p>
       <label class="field"><span>页面顺序</span><select id="direction"><option value="ltr">左页 → 右页</option><option value="rtl">右页 → 左页</option></select></label>
       <label class="field"><span>裁边模式</span><select id="cropMode"><option value="auto">自动识别书本四边</option><option value="fixed">高级：固定四角（可选）</option><option value="off">高级：传统比例裁边（不自动识别）</option></select></label><button id="calibrate" class="btn full">高级：手动校准（非必需）</button><p id="cropStatus" class="hint">自动模式不使用比例裁边作为备用。建议使用深色、无反光桌垫，书本四周留空。</p><div class="field"><div class="range-label"><label for="split">裁边后书脊分割位置</label><output id="splitValue">50%</output></div><input id="split" type="range" min="30" max="70" value="50" step="1"></div>
       <div class="field"><div class="range-label"><label for="margin">仅传统比例模式使用</label><output id="marginValue">3%</output></div><input id="margin" type="range" min="0" max="12" value="3" step="1"></div>
       <div class="field"><div class="range-label"><label for="stability">稳定等待时间</label><output id="stabilityValue">0.8 秒</output></div><input id="stability" type="range" min="400" max="2000" value="800" step="100"></div>
       <label class="field"><span>输出画质</span><select id="quality"><option value="0.88">较高（建议）</option><option value="0.95">最高（更大文件）</option><option value="0.72">节省空间</option></select></label>
-      <div class="stats"><div><strong id="spreadCount">0</strong><small>已通过裁边</small></div><div><strong id="pageCount">0</strong><small>可用书页</small></div><div><strong id="cameraRes">—</strong><small>视频分辨率</small></div></div>
+      <div class="stats"><div><strong id="spreadCount">0</strong><small>已确认拍摄</small></div><div><strong id="pageCount">0</strong><small>实际页面</small></div><div><strong id="cameraRes">—</strong><small>视频分辨率</small></div></div>
       <button id="exportPdf" class="btn primary full" disabled>生成并保存 PDF</button>
       <button id="clearAll" class="btn danger-outline full">清空当前书籍</button>
-      <p class="hint">变更裁剪位置只影响后续拍摄；已有图片可通过“重新切分”按当前设置更新。生成 PDF 时按当前页面顺序导出。</p>
+      <p class="hint">变更裁剪位置和拍摄类型只影响后续拍摄；已有照片可单独重设单双页或重新裁边。生成 PDF 时按当前页面顺序导出。</p>
     </aside>
   </section>
   <section class="panel search-panel" id="bookSearch">
@@ -67,11 +69,11 @@
   </section>
   <section class="panel gallery-panel">
     <div class="panel-header"><h2>扫描结果 <span id="pageCountHeader" class="muted">0 页</span></h2><div class="toolbar"><button id="resplit" class="btn small" disabled>重新裁边全部</button><button id="downloadBackup" class="btn small" disabled>下载原图备份</button></div></div>
-    <div id="gallery" class="gallery"><div class="empty-gallery">尚无扫描页。开启摄像头或导入一张打开书本的跨页照片。</div></div>
+    <div id="gallery" class="gallery"><div class="empty-gallery">尚无扫描页。开启摄像头或导入一张打开书本的书页照片。</div></div>
   </section>
-  <section class="notes"><h2>使用须知</h2><p>此版本采用浏览器实时视频帧拍照，最大分辨率由 iPad Safari 和摄像头接口决定。厚书的书脊曲面不会自动拉平；如出现文字切断，请调整书脊位置后重新切分。建议先扫描10组跨页确认质量，再开始整本书。</p><p>扫描数据（含原图和 OCR 文本）保存在当前设备浏览器的 IndexedDB 中；浏览器可能在存储空间紧张或清除网站数据时删除记录。完成一本书后，请及时导出 PDF 和原图备份。</p></section>
+  <section class="notes"><h2>使用须知</h2><p>此版本通过浏览器视频帧拍摄，最大分辨率由 iPad Safari 决定。厚书曲面尚不能自动拉平；对疑似单双页或裁边失败的照片会标记待确认。建议先测试封面、扉页和10组双页，再扫描整本书。</p><p>扫描数据（含原图和 OCR 文本）保存在当前设备浏览器的 IndexedDB 中；浏览器可能在存储空间紧张或清除网站数据时删除记录。完成一本书后，请及时导出 PDF 和原图备份。</p></section>
 </main>
-<dialog id="cropDialog"><h2 id="cropTitle">四角裁边</h2><p>拖动绿色四角贴合书本边缘，黄色线为左右页分割位置。阴影区域将被移除。</p><canvas id="cropCanvas"></canvas><label class="field">书脊位置<input id="cropSplit" type="range" min="20" max="80" value="50"></label><div class="controls"><button id="cropDetect" class="btn">重新自动识别</button><button id="cropReset" class="btn">恢复全画面</button><button id="cropCancel" class="btn">取消</button><button id="cropSave" class="btn primary">保存裁边</button></div></dialog><div id="toast" role="status" aria-live="polite"></div>
+<dialog id="cropDialog"><h2 id="cropTitle">四角裁边</h2><p>拖动绿色四角贴合书本边缘，双页时黄色线为左右页分割位置。阴影区域将被移除。</p><canvas id="cropCanvas"></canvas><label class="field">输出页数<select id="cropLayout"><option value="auto">自动识别</option><option value="single">单页</option><option value="double">双页</option></select></label><label class="field">双页书脊位置<input id="cropSplit" type="range" min="20" max="80" value="50"></label><div class="controls"><button id="cropDetect" class="btn">重新自动识别</button><button id="cropReset" class="btn">恢复全画面</button><button id="cropCancel" class="btn">取消</button><button id="cropSave" class="btn primary">保存裁边</button></div></dialog><div id="toast" role="status" aria-live="polite"></div>
 <script type="module" src="app.js"></script>
 </body>
 </html>
