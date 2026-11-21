@@ -39,7 +39,7 @@ function estimate(mask,w,h,lum){
  const p=[intersect(L,T),intersect(R,T),intersect(R,B),intersect(L,B)];
  const q=p.map(([x,y])=>[x/(w-1),y/(h-1)]);if(!validQuad(q)||q.some(([x,y])=>x<.009||x>.991||y<.009||y>.991))return null;
  const dist=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]),width=(dist(p[0],p[1])+dist(p[2],p[3]))/2,height=(dist(p[0],p[3])+dist(p[1],p[2]))/2;
- if(width/height<.85||width/height>2.55||width*height<n*.16||width*height>n*.91||count/(width*height)<.44)return null;
+ if(width/height<.50||width/height>2.55||width*height<n*.16||width*height>n*.91||count/(width*height)<.44)return null;
  // Confirm actual paper/background contrast on EACH side, not just a bright bounding box.
  const get=(x,y)=>lum[Math.max(0,Math.min(h-1,Math.round(y)))*w+Math.max(0,Math.min(w-1,Math.round(x)))];
  const cx=p.reduce((s,a)=>s+a[0],0)/4,cy=p.reduce((s,a)=>s+a[1],0)/4;let score=0;
@@ -55,10 +55,32 @@ export function detectPixels(data,w,h){
  if(w<32||h<32)return null;const n=w*h,lum=new Float32Array(n),border=[],hist=new Array(256).fill(0);
  for(let i=0;i<n;i++){const j=i*4,v=.299*data[j]+.587*data[j+1]+.114*data[j+2];lum[i]=v;hist[Math.round(v)]++;const x=i%w,y=Math.floor(i/w);if(x<4||y<4||x>=w-4||y>=h-4)border.push(v)}
  const bg=median(border);let acc=0,bright=255;for(let i=0;i<256;i++){acc+=hist[i];if(acc>=n*.84){bright=i;break}}
- if(bright-bg<27)return null;
- let best=null;for(const fraction of [.34,.50,.66]){const threshold=bg+(bright-bg)*fraction,mask=new Uint8Array(n);for(let i=0;i<n;i++)mask[i]=lum[i]>=threshold?1:0;const candidate=estimate(mask,w,h,lum);if(candidate&&(!best||candidate.score>best.score))best=candidate}
+ let best=null;for(const fraction of bright-bg>=27?[.34,.50,.66]:[]){const threshold=bg+(bright-bg)*fraction,mask=new Uint8Array(n);for(let i=0;i<n;i++)mask[i]=lum[i]>=threshold?1:0;const candidate=estimate(mask,w,h,lum);if(candidate&&(!best||candidate.score>best.score))best=candidate}
+ if(best)return best.q;
+ // Fallback for colored/dark covers: compare each pixel's RGB color with the mat at the frame border.
+ // Keep the same four-edge validation; do not crop to the entire camera frame on failure.
+ const rb=[],gb=[],bb=[];
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+  if(x>=4&&x<w-4&&y>=4&&y<h-4)continue;
+  const j=(y*w+x)*4;rb.push(data[j]);gb.push(data[j+1]);bb.push(data[j+2]);
+ }
+ const baseR=median(rb),baseG=median(gb),baseB=median(bb);
+ const contrast=new Float32Array(n),chist=new Uint32Array(256);
+ for(let i=0;i<n;i++){
+  const j=i*4,v=Math.max(Math.abs(data[j]-baseR),Math.abs(data[j+1]-baseG),Math.abs(data[j+2]-baseB));
+  contrast[i]=v;chist[Math.min(255,Math.round(v))]++;
+ }
+ let cumul=0,top=0;for(let i=0;i<256;i++){cumul+=chist[i];if(cumul>=n*.84){top=i;break}}
+ if(top<34)return null;
+ for(const fraction of [.35,.50,.65]){
+  const threshold=Math.max(15,top*fraction),mask=new Uint8Array(n);
+  for(let i=0;i<n;i++)mask[i]=contrast[i]>=threshold?1:0;
+  const candidate=estimate(mask,w,h,contrast);
+  if(candidate&&(!best||candidate.score>best.score))best=candidate;
+ }
  return best?.q??null;
 }
+
 export function detectBook(image,w,h){const c=document.createElement('canvas'),scale=Math.min(1,440/Math.max(w,h));c.width=Math.round(w*scale);c.height=Math.round(h*scale);const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0,c.width,c.height);return detectPixels(ctx.getImageData(0,0,c.width,c.height).data,c.width,c.height)}
 export function quadDifference(a,b){return !a||!b?Infinity:Math.max(...a.map((p,i)=>Math.hypot(p[0]-b[i][0],p[1]-b[i][1])))}
 export function homography(q){const [[x0,y0],[x1,y1],[x2,y2],[x3,y3]]=q;const dx1=x1-x2,dx2=x3-x2,dx3=x0-x1+x2-x3,dy1=y1-y2,dy2=y3-y2,dy3=y0-y1+y2-y3;const den=dx1*dy2-dx2*dy1;if(Math.abs(den)<1e-10)throw Error('四角范围无效');const g=(dx3*dy2-dx2*dy3)/den,h=(dx1*dy3-dx3*dy1)/den;return [x1-x0+g*x1,x3-x0+h*x3,x0,y1-y0+g*y1,y3-y0+h*y3,y0,g,h]}
